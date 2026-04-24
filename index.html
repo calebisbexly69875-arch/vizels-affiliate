@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VizelsTweaks Affiliate Program</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div class="page">
+    <div class="card">
+
+      <div class="badge">AFFILIATE APPLICATIONS OPEN</div>
+
+      <h1>VizelsTweaks Affiliate Program</h1>
+
+      <p class="subtitle">
+        Apply to become a VizelsTweaks affiliate and earn commission by promoting our tweak panels.
+      </p>
+
+      <div class="grid">
+
+        <div class="info-box">
+          <h2>How It Works</h2>
+
+          <div class="step"><strong>1.</strong> Sign up with your affiliate info.</div>
+          <div class="step"><strong>2.</strong> Verify your email with a 6-digit code.</div>
+          <div class="step"><strong>3.</strong> Your application gets reviewed.</div>
+          <div class="step"><strong>4.</strong> If approved, you can start promoting.</div>
+        </div>
+
+        <form class="signup-form" action="/signup" method="POST">
+          <h2>Affiliate Signup</h2>
+
+          <div class="row">
+            <input name="firstName" type="text" placeholder="First Name" required />
+            <input name="lastName" type="text" placeholder="Last Name" required />
+          </div>
+
+          <input name="email" type="email" placeholder="Email Address" required />
+          <input name="password" type="password" placeholder="Password" required />
+          <input name="discountCode" type="text" placeholder="SocialName / DiscountCode" required />
+          <input name="discordUsername" type="text" placeholder="Discord Username" required />
+
+          <label class="checkbox">
+            <input name="agreement" type="checkbox" required />
+            <span>I agree to the affiliate agreement</span>
+          </label>
+
+          <button type="submit">Submit Application</button>
+        </form>
+
+      </div>
+
+      <p class="note">After submitting, check your email for the verification code.</p>
+
+    </div>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Verify Email</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="page">
+    <div class="card">
+      <div class="badge">EMAIL VERIFICATION</div>
+      <h1>Verify Your Email</h1>
+      <p class="subtitle">Enter the 6-digit code sent to your email.</p>
+
+      <form class="signup-form" action="/verify" method="POST">
+        <input id="email" name="email" type="email" placeholder="Email Address" required>
+        <input name="code" type="text" placeholder="Verification Code" required>
+        <button type="submit">Verify Account</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const email = params.get("email");
+    if (email) document.getElementById("email").value = email;
+  </script>
+</body>
+</html>
