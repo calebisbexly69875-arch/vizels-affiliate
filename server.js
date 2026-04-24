@@ -10,6 +10,8 @@ const session = require("express-session");
 const app = express();
 const db = new Database("affiliates.db");
 
+app.set("trust proxy", 1);
+
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
@@ -17,7 +19,12 @@ app.use(express.static(path.join(__dirname)));
 app.use(session({
   secret: process.env.SESSION_SECRET || "change-this-secret",
   resave: false,
-  saveUninitialized: false
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production"
+  }
 }));
 
 db.prepare(`
@@ -36,12 +43,32 @@ CREATE TABLE IF NOT EXISTS users (
   code_expires INTEGER,
   sales INTEGER DEFAULT 0,
   commission REAL DEFAULT 0,
+  clicks INTEGER DEFAULT 0,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
+)
+`).run();
+
+db.prepare(`
+CREATE TABLE IF NOT EXISTS clicks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  discount_code TEXT NOT NULL,
+  ip TEXT,
+  user_agent TEXT,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+)
+`).run();
+
+db.prepare(`
+CREATE TABLE IF NOT EXISTS signup_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ip TEXT NOT NULL,
+  created_at INTEGER NOT NULL
 )
 `).run();
 
 try { db.prepare("ALTER TABLE users ADD COLUMN approved INTEGER DEFAULT 0").run(); } catch {}
 try { db.prepare("ALTER TABLE users ADD COLUMN denied INTEGER DEFAULT 0").run(); } catch {}
+try { db.prepare("ALTER TABLE users ADD COLUMN clicks INTEGER DEFAULT 0").run(); } catch {}
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -55,23 +82,74 @@ function makeCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+function siteUrl(req) {
+  return process.env.SITE_URL || `${req.protocol}://${req.get("host")}`;
+}
+
 function isAdmin(req) {
   return req.query.key === process.env.ADMIN_KEY;
 }
 
+function cleanAffiliateCode(code) {
+  return String(code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function isSignupRateLimited(ip) {
+  const fifteenMinutesAgo = Date.now() - 15 * 60 * 1000;
+
+  db.prepare("DELETE FROM signup_attempts WHERE created_at < ?").run(fifteenMinutesAgo);
+
+  const count = db.prepare("SELECT COUNT(*) AS total FROM signup_attempts WHERE ip = ?").get(ip).total;
+
+  if (count >= 3) return true;
+
+  db.prepare("INSERT INTO signup_attempts (ip, created_at) VALUES (?, ?)").run(ip, Date.now());
+  return false;
+}
+
 app.get("/", (req, res) => {
+  const ref = cleanAffiliateCode(req.query.ref);
+
+  if (ref) {
+    const user = db.prepare("SELECT * FROM users WHERE discount_code = ? AND approved = 1").get(ref);
+
+    if (user) {
+      db.prepare("UPDATE users SET clicks = clicks + 1 WHERE discount_code = ?").run(ref);
+      db.prepare("INSERT INTO clicks (discount_code, ip, user_agent) VALUES (?, ?, ?)").run(
+        ref,
+        req.ip,
+        req.get("user-agent") || ""
+      );
+
+      res.cookie("affiliate_ref", ref, {
+        maxAge: 30 * 24 * 60 * 60 * 1000,
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production"
+      });
+    }
+  }
+
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
 app.post("/signup", async (req, res) => {
   try {
+    if (isSignupRateLimited(req.ip)) {
+      return res.send("Too many signup attempts. Please try again later.");
+    }
+
     const { firstName, lastName, email, password, discountCode, discordUsername, agreement } = req.body;
 
     if (!firstName || !lastName || !email || !password || !discountCode || !discordUsername || agreement !== "on") {
       return res.send("Missing info or agreement not checked.");
     }
 
-    const cleanCode = discountCode.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (password.length < 8) {
+      return res.send("Password must be at least 8 characters.");
+    }
+
+    const cleanCode = cleanAffiliateCode(discountCode);
 
     if (cleanCode.length < 3) {
       return res.send("Discount code must be at least 3 letters/numbers.");
@@ -145,10 +223,10 @@ Code: ${user.discount_code}
 Discord: ${user.discord_username}
 
 Approve:
-http://localhost:3000/admin/approve/${user.discount_code}?key=${process.env.ADMIN_KEY}
+${siteUrl(req)}/admin/approve/${user.discount_code}?key=${process.env.ADMIN_KEY}
 
 Deny:
-http://localhost:3000/admin/deny/${user.discount_code}?key=${process.env.ADMIN_KEY}
+${siteUrl(req)}/admin/deny/${user.discount_code}?key=${process.env.ADMIN_KEY}
     `
   });
 
@@ -174,6 +252,7 @@ app.get("/dashboard", (req, res) => {
   if (!req.session.userId) return res.redirect("/login.html");
 
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.session.userId);
+  const referralLink = `${siteUrl(req)}/?ref=${user.discount_code}`;
 
   if (!user.approved) {
     return res.send(`
@@ -188,13 +267,21 @@ app.get("/dashboard", (req, res) => {
     <div class="card">
       <div class="badge">PENDING APPROVAL</div>
       <h1>Application Received</h1>
-      <p class="subtitle">Your email is verified. Your application is now waiting for review.</p>
+      <p class="subtitle">Your email is verified. Your application is waiting for review.</p>
 
-      <div class="info-box">
-        <h2>Status</h2>
-        <div class="step"><strong>Email Verified:</strong> Yes</div>
-        <div class="step"><strong>Approved:</strong> Not yet</div>
-        <div class="step"><strong>Discount Code:</strong> ${user.discount_code}</div>
+      <div class="dashboard-grid">
+        <div class="stat-card">
+          <span>Email</span>
+          <strong>Verified</strong>
+        </div>
+        <div class="stat-card">
+          <span>Status</span>
+          <strong>Pending</strong>
+        </div>
+        <div class="stat-card">
+          <span>Code</span>
+          <strong>${user.discount_code}</strong>
+        </div>
       </div>
 
       <form action="/logout" method="POST">
@@ -216,10 +303,25 @@ app.get("/dashboard", (req, res) => {
 </head>
 <body>
   <div class="page">
-    <div class="card">
+    <div class="card dashboard-card">
       <div class="badge">AFFILIATE DASHBOARD</div>
       <h1>Welcome, ${user.first_name}</h1>
       <p class="subtitle">Your affiliate account is approved and active.</p>
+
+      <div class="dashboard-grid">
+        <div class="stat-card">
+          <span>Clicks</span>
+          <strong>${user.clicks}</strong>
+        </div>
+        <div class="stat-card">
+          <span>Sales</span>
+          <strong>${user.sales}</strong>
+        </div>
+        <div class="stat-card">
+          <span>Commission</span>
+          <strong>$${Number(user.commission).toFixed(2)}</strong>
+        </div>
+      </div>
 
       <div class="grid">
         <div class="info-box">
@@ -231,11 +333,21 @@ app.get("/dashboard", (req, res) => {
         </div>
 
         <div class="info-box">
-          <h2>Affiliate Stats</h2>
-          <div class="step"><strong>Discount Code:</strong> ${user.discount_code}</div>
-          <div class="step"><strong>Referral Link:</strong> http://localhost:3000/?ref=${user.discount_code}</div>
-          <div class="step"><strong>Sales:</strong> ${user.sales}</div>
-          <div class="step"><strong>Commission:</strong> $${user.commission}</div>
+          <h2>Promote</h2>
+
+          <label class="mini-label">Discount Code</label>
+          <div class="copy-row">
+            <input id="codeBox" value="${user.discount_code}" readonly>
+            <button type="button" onclick="copyText('codeBox')">Copy</button>
+          </div>
+
+          <label class="mini-label">Referral Link</label>
+          <div class="copy-row">
+            <input id="linkBox" value="${referralLink}" readonly>
+            <button type="button" onclick="copyText('linkBox')">Copy</button>
+          </div>
+
+          <p class="small-note">Share your referral link. Clicks are tracked automatically.</p>
         </div>
       </div>
 
@@ -244,6 +356,16 @@ app.get("/dashboard", (req, res) => {
       </form>
     </div>
   </div>
+
+  <script>
+    function copyText(id) {
+      const box = document.getElementById(id);
+      box.select();
+      box.setSelectionRange(0, 99999);
+      navigator.clipboard.writeText(box.value);
+      alert("Copied!");
+    }
+  </script>
 </body>
 </html>
   `);
@@ -252,16 +374,12 @@ app.get("/dashboard", (req, res) => {
 app.get("/admin/approve/:code", async (req, res) => {
   if (!isAdmin(req)) return res.send("Not allowed.");
 
-  const code = req.params.code.toUpperCase();
+  const code = cleanAffiliateCode(req.params.code);
   const user = db.prepare("SELECT * FROM users WHERE discount_code = ?").get(code);
 
   if (!user) return res.send("Affiliate not found.");
 
-  db.prepare(`
-    UPDATE users 
-    SET approved = 1, denied = 0 
-    WHERE discount_code = ?
-  `).run(code);
+  db.prepare("UPDATE users SET approved = 1, denied = 0 WHERE discount_code = ?").run(code);
 
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
@@ -272,12 +390,11 @@ Hey ${user.first_name},
 
 Your VizelsTweaks affiliate application has been approved!
 
-You can now log in to your dashboard:
-http://localhost:3000/login.html
+Login here:
+${siteUrl(req)}/login.html
 
 Your Discount Code: ${user.discount_code}
-
-Welcome to the affiliate program.
+Your Referral Link: ${siteUrl(req)}/?ref=${user.discount_code}
     `
   });
 
@@ -287,16 +404,12 @@ Welcome to the affiliate program.
 app.get("/admin/deny/:code", async (req, res) => {
   if (!isAdmin(req)) return res.send("Not allowed.");
 
-  const code = req.params.code.toUpperCase();
+  const code = cleanAffiliateCode(req.params.code);
   const user = db.prepare("SELECT * FROM users WHERE discount_code = ?").get(code);
 
   if (!user) return res.send("Affiliate not found.");
 
-  db.prepare(`
-    UPDATE users 
-    SET approved = 0, denied = 1 
-    WHERE discount_code = ?
-  `).run(code);
+  db.prepare("UPDATE users SET approved = 0, denied = 1 WHERE discount_code = ?").run(code);
 
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
@@ -308,8 +421,6 @@ Hey ${user.first_name},
 Thanks for applying to the VizelsTweaks affiliate program.
 
 Your application was not approved at this time.
-
-You can contact support if you believe this was a mistake.
     `
   });
 
@@ -322,14 +433,13 @@ app.get("/admin/users", (req, res) => {
   const users = db.prepare("SELECT * FROM users ORDER BY created_at DESC").all();
 
   const rows = users.map(user => `
-    <div class="step">
-      <strong>${user.first_name} ${user.last_name}</strong><br>
-      Email: ${user.email}<br>
-      Discord: ${user.discord_username}<br>
-      Code: ${user.discount_code}<br>
-      Verified: ${user.verified ? "Yes" : "No"}<br>
-      Approved: ${user.approved ? "Yes" : "No"}<br>
-      Denied: ${user.denied ? "Yes" : "No"}<br><br>
+    <div class="admin-user">
+      <strong>${user.first_name} ${user.last_name}</strong>
+      <p>Email: ${user.email}</p>
+      <p>Discord: ${user.discord_username}</p>
+      <p>Code: ${user.discount_code}</p>
+      <p>Clicks: ${user.clicks} | Sales: ${user.sales} | Commission: $${Number(user.commission).toFixed(2)}</p>
+      <p>Verified: ${user.verified ? "Yes" : "No"} | Approved: ${user.approved ? "Yes" : "No"} | Denied: ${user.denied ? "Yes" : "No"}</p>
       <a href="/admin/approve/${user.discount_code}?key=${process.env.ADMIN_KEY}">Approve</a>
       |
       <a href="/admin/deny/${user.discount_code}?key=${process.env.ADMIN_KEY}">Deny</a>
@@ -358,12 +468,47 @@ app.get("/admin/users", (req, res) => {
   `);
 });
 
+app.get("/admin/clicks", (req, res) => {
+  if (!isAdmin(req)) return res.send("Not allowed.");
+
+  const clicks = db.prepare("SELECT * FROM clicks ORDER BY created_at DESC LIMIT 100").all();
+
+  const rows = clicks.map(click => `
+    <div class="step">
+      <strong>${click.discount_code}</strong><br>
+      IP: ${click.ip}<br>
+      Time: ${click.created_at}
+    </div>
+  `).join("");
+
+  res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Affiliate Clicks</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="page">
+    <div class="card">
+      <div class="badge">CLICK TRACKING</div>
+      <h1>Recent Clicks</h1>
+      <div class="info-box">${rows || "No clicks yet."}</div>
+    </div>
+  </div>
+</body>
+</html>
+  `);
+});
+
 app.post("/logout", (req, res) => {
   req.session.destroy(() => {
     res.redirect("/login.html");
   });
 });
 
-app.listen(3000, () => {
-  console.log("Website running at http://localhost:3000");
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log("Server running on port " + PORT);
 });
