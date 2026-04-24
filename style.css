@@ -35,6 +35,10 @@ body {
   backdrop-filter: blur(18px);
 }
 
+.dashboard-card {
+  max-width: 1050px;
+}
+
 .badge {
   width: fit-content;
   margin: 0 auto 18px;
@@ -168,8 +172,84 @@ button:hover {
   font-size: 14px;
 }
 
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin: 26px 0;
+}
+
+.stat-card {
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 20px;
+  padding: 22px;
+  text-align: center;
+}
+
+.stat-card span {
+  display: block;
+  color: #a8a8a8;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.stat-card strong {
+  display: block;
+  color: #ffffff;
+  font-size: 30px;
+}
+
+.copy-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.copy-row input {
+  flex: 1;
+}
+
+.copy-row button {
+  width: 110px;
+  margin-top: 0;
+}
+
+.mini-label {
+  color: #cccccc;
+  font-size: 13px;
+  font-weight: bold;
+  margin-bottom: 7px;
+  display: block;
+}
+
+.small-note {
+  color: #999999;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.admin-user {
+  padding: 16px;
+  margin-bottom: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.admin-user p {
+  color: #cccccc;
+  margin: 6px 0;
+}
+
+.admin-user a {
+  color: white;
+  font-weight: bold;
+}
+
 @media (max-width: 800px) {
-  .grid {
+  .grid,
+  .dashboard-grid {
     grid-template-columns: 1fr;
   }
 
@@ -181,7 +261,12 @@ button:hover {
     padding: 26px;
   }
 
-  .row {
+  .row,
+  .copy-row {
     flex-direction: column;
+  }
+
+  .copy-row button {
+    width: 100%;
   }
 }
