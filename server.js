@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const cookieParser = require("cookie-parser");
 const express = require("express");
 const nodemailer = require("nodemailer");
 const path = require("path");
@@ -15,6 +16,7 @@ app.set("trust proxy", 1);
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
+app.use(cookieParser());
 
 app.use(session({
   secret: process.env.SESSION_SECRET || "change-this-secret",
@@ -511,4 +513,31 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
+});
+app.post("/purchase", (req, res) => {
+  try {
+    const amount = Number(req.body.amount) || 0;
+
+    const ref = req.cookies?.affiliate_ref;
+
+    if (ref) {
+      const user = db.prepare("SELECT * FROM users WHERE discount_code = ? AND approved = 1").get(ref);
+
+      if (user) {
+        const commission = amount * 0.30; // 30%
+
+        db.prepare(`
+          UPDATE users 
+          SET sales = sales + 1,
+              commission = commission + ?
+          WHERE discount_code = ?
+        `).run(commission, ref);
+      }
+    }
+
+    res.send("Purchase recorded");
+  } catch (err) {
+    console.error(err);
+    res.send("Error recording purchase");
+  }
 });
